@@ -1,0 +1,9 @@
+{
+    "name": "neurobruber",
+    "private": true,
+    "scripts": {
+        "start": "node bot.js",
+        "brew": "node neurobruber.js",
+        "oneshot": "node bot.js oneshot"
+    }
+}
