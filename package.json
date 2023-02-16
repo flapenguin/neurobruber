@@ -5,5 +5,8 @@
         "start": "node bot.js",
         "brew": "node neurobruber.js",
         "oneshot": "node bot.js oneshot"
+    },
+    "dependencies": {
+        "@tensorflow/tfjs-node": "3.15.0"
     }
 }

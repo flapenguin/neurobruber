@@ -1,8 +1,4 @@
-// Whatever. But must be consistent between data building and usage.
-const BOL = '§';
-const EOL = '∆';
-
-module.exports = (markov) => () => {
+module.exports = ({markov, BOL, EOL}) => () => {
     const res = [];
     for (let prev = BOL; prev != EOL; ) {
         const word = markov[prev];
@@ -18,78 +14,92 @@ module.exports = (markov) => () => {
     return res.join(' ');
 };
 
-async function brew (file, user_id) {
-    const {spawn} = require('node:child_process');
-    const readline = require('node:readline');
-    const events = require('node:events');
+async function brew ({file, user, eolWeight}) {
+    // Whatever. But must be consistent between data building and usage.
+    const BOL = '§';
+    const EOL = '∆';
 
-    // TODO: refactor
-    const jq = spawn('jq', [`
-        def txt:
-            if   . | type == "array"
-                then map(txt)
-            elif . | type == "object" and (.type == "bot_command" or .type == "link" or .type == "pre" or .type == "email")
-                then empty
-            elif . | type == "object" and (.type == "mention" or .type == "mention_name" or .type == "hashtag" or .type == "italic" or .type == "bold")
-                then .text
-            else .
-            end;
+    const fs = require('node:fs');
 
-        .
-        | .messages
-        | .[]
-        | select(
-                .from_id == $user_id
-            and (.forwarded_from | type != "string")
-            and .text != ""
-        )
-        | .text
-        | txt
-        | if (. | type == "array") then join("") else . end
-    `, './data/cs_chat.json', '--arg', 'user_id', user_id], {stdio: ['ignore', 'pipe', 'inherit']});
+    function txt (x) {
+        if (typeof x === 'string') return x;
+        if (Array.isArray(x)) return x.map(x => txt(x));
+        switch (x.type) {
+            case 'mention':
+            case 'mention_name':
+            case 'hashtag':
+            case 'italic':
+            case 'bold':
+                return x.text;
+            case 'bot_command':
+            case 'link':
+            case 'pre':
+            case 'email':
+            case 'custom_emoji':
+            case 'text_link':
+            case 'strikethrough':
+            case 'spoiler':
+            case 'phone':
+                return '';
+            default:
+                console.error(x)
+                return '';
+        }
+    }
 
-    const rl = readline.createInterface({
-        input: jq.stdout,
-        crlfDelay: Infinity
-    });
+    const lines = JSON.parse(fs.readFileSync(file, 'utf8'))
+        .filter(x => x.from_id === user && !x.forwarded_from && x.text)
+        .map(x => [txt(x.text)].flat(Infinity).join(''));
 
     const markov = {};
-    const store = (word, next) => {
+    const store = (word, next, weight = 1) => {
         const wordKey = word.toLowerCase();
         const nextKey = next.toLowerCase();
 
         markov[wordKey] ??= {next: {}, vars: {}};
         markov[wordKey].vars[word] = 1;
         markov[wordKey].next[nextKey] ??= 0;
-        markov[wordKey].next[nextKey] += 1;
+        markov[wordKey].next[nextKey] += weight;
     };
 
-    rl.on('line', (line) => {
-        const msg = JSON.parse(line);
-        const words = msg.split(/\s+|[,.?!]/g).filter(Boolean);
-        if (words.length === 0) return;
+    for (const line of lines) {
+        const words = line.split(/\s+|[,.?!]/g).filter(Boolean);
+        if (words.length === 0) continue;
 
         store(BOL, words[0]);
         for (let i = 0; i < words.length - 1; i++) {
             store(words[i], words[i + 1]);
         }
-        store(words[words.length - 1], EOL);
-    });
-
-    await events.once(rl, 'close');
+        store(words[words.length - 1], EOL, eolWeight);
+    }
 
     for (const key of Object.keys(markov)) {
         markov[key].total = Object.values(markov[key].next).reduce((s, x) => s + x, 0);
     }
 
-    return markov;
+    return {BOL, EOL, markov};
 }
 
 if (require.main === module) {
     (async () => {
         const fs = require('node:fs');
-        const markov = await brew('./data/tg.json', require('./secrets.json')['brew:user_id']);
-        fs.writeFileSync('./data/markov.json', JSON.stringify(markov));
+        const util = require('node:util');
+        const args = util.parseArgs({
+            args: process.argv.slice(2),
+            options: {
+                user: {type: 'string'},
+                in: {type: 'string'},
+                out: {type: 'string'},
+                eolWeight: {type: 'string'}
+            }
+        });
+
+        const markov = await brew({
+            file: args.values.in,
+            user: args.values.user,
+            eolWeight: Number(args.values.eolWeight ?? '1')
+        });
+        fs.writeFileSync(args.values.out, JSON.stringify(markov));
     })();
 }
 
